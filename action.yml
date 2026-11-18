@@ -47,6 +47,10 @@ inputs:
     description: 'Skip installing Linux apt dependencies (gtk4, webkitgtk6, nsis, rpm)'
     required: false
     default: 'false'
+  skip-setup:
+    description: 'Skip apt, Go, Node.js, and Wails CLI installation (use when running inside the pre-built container image)'
+    required: false
+    default: 'false'
   pre-build-command:
     description: 'Optional shell command to run after dependencies are installed and version is applied (e.g. "make update-asset")'
     required: false
@@ -100,14 +104,14 @@ runs:
   using: 'composite'
   steps:
     - name: Cache Linux apt packages
-      if: inputs.skip-apt != 'true'
+      if: inputs.skip-apt != 'true' && inputs.skip-setup != 'true'
       uses: actions/cache@v4
       with:
         path: ~/.cache/wails3-apt
         key: wails3-apt-${{ runner.os }}-${{ runner.arch }}-gtk4-webkit6-nsis-rpm-v1
 
     - name: Install Linux & Windows cross-build dependencies
-      if: inputs.skip-apt != 'true'
+      if: inputs.skip-apt != 'true' && inputs.skip-setup != 'true'
       shell: bash
       run: |
         PKGS="pkg-config gcc libc6-dev libgtk-4-dev libwebkitgtk-6.0-dev nsis rpm"
@@ -119,19 +123,20 @@ runs:
           $PKGS
 
     - name: Setup Node.js
+      if: inputs.skip-setup != 'true'
       uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
 
     - name: Setup Go (by version)
-      if: inputs.go-version != ''
+      if: inputs.skip-setup != 'true' && inputs.go-version != ''
       uses: actions/setup-go@v5
       with:
         go-version: ${{ inputs.go-version }}
         cache: true
 
     - name: Setup Go (by go.mod)
-      if: inputs.go-version == ''
+      if: inputs.skip-setup != 'true' && inputs.go-version == ''
       uses: actions/setup-go@v5
       with:
         go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
@@ -144,7 +149,19 @@ runs:
         echo "gopath=$(go env GOPATH)" >> "$GITHUB_OUTPUT"
         echo "goversion=$(go version | awk '{print $3}')" >> "$GITHUB_OUTPUT"
 
+    - name: Cache Go modules & build cache (container mode)
+      if: inputs.skip-setup == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ steps.go-env.outputs.gopath }}/pkg/mod
+          ~/.cache/go-build
+        key: wails3-go-${{ runner.os }}-${{ steps.go-env.outputs.goversion }}-${{ hashFiles(format('{0}/go.sum', inputs.working-directory)) }}
+        restore-keys: |
+          wails3-go-${{ runner.os }}-${{ steps.go-env.outputs.goversion }}-
+
     - name: Cache Wails v3 CLI
+      if: inputs.skip-setup != 'true'
       id: cache-wails3
       uses: actions/cache@v4
       with:
@@ -152,6 +169,7 @@ runs:
         key: wails3-cli-${{ runner.os }}-${{ runner.arch }}-${{ inputs.wails-version }}-${{ steps.go-env.outputs.goversion }}
 
     - name: Install Wails v3 CLI
+      if: inputs.skip-setup != 'true'
       shell: bash
       run: |
         if [ "${{ steps.cache-wails3.outputs.cache-hit }}" != "true" ]; then
