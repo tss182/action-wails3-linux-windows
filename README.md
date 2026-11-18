@@ -10,6 +10,8 @@ Fast, cached GitHub Composite Action to build **Wails v3** applications for **Li
 
 ## Usage
 
+### Mode 1: Standard Runner (Cached)
+
 ```yaml
 jobs:
   build-linux-windows:
@@ -19,6 +21,25 @@ jobs:
 
       - uses: tss182/action-wails3-linux-windows@v1
         with:
+          app-name: dhub
+          version: "0.3.7"
+          pre-build-command: make update-asset
+```
+
+### Mode 2: Pre-built Container Image (Fastest Setup)
+
+```yaml
+jobs:
+  build-linux-windows:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/tss182/wails3-linux-windows:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: tss182/action-wails3-linux-windows@v1
+        with:
+          skip-setup: "true"
           app-name: dhub
           version: "0.3.7"
           pre-build-command: make update-asset
