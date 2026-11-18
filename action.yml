@@ -1,0 +1,321 @@
+name: 'Build Wails v3 (Linux & Windows)'
+description: 'Fast, cached GitHub Action for building Wails v3 applications for Linux (DEB, RPM, AppImage) and Windows (amd64/arm64 exe & NSIS installer).'
+author: 'tss182'
+
+branding:
+  icon: 'package'
+  color: 'blue'
+
+inputs:
+  working-directory:
+    description: 'Project root directory'
+    required: false
+    default: '.'
+  frontend-dir:
+    description: 'Frontend directory relative to working-directory'
+    required: false
+    default: 'frontend'
+  app-name:
+    description: 'Application binary/package name (auto-detected from Taskfile.yml if omitted)'
+    required: false
+    default: ''
+  version:
+    description: 'Release version (e.g. 0.3.7). If set, updates build/config.yml and creates versioned output filenames.'
+    required: false
+    default: ''
+  go-version-file:
+    description: 'Path to go.mod relative to working-directory'
+    required: false
+    default: 'go.mod'
+  go-version:
+    description: 'Go version (overrides go-version-file if set)'
+    required: false
+    default: ''
+  node-version:
+    description: 'Node.js version'
+    required: false
+    default: '20'
+  package-manager:
+    description: 'Frontend package manager (npm, pnpm, yarn, bun)'
+    required: false
+    default: 'npm'
+  wails-version:
+    description: 'Wails v3 CLI version tag or commit'
+    required: false
+    default: 'v3.0.0'
+  skip-apt:
+    description: 'Skip installing Linux apt dependencies (gtk4, webkitgtk6, nsis, rpm)'
+    required: false
+    default: 'false'
+  pre-build-command:
+    description: 'Optional shell command to run after dependencies are installed and version is applied (e.g. "make update-asset")'
+    required: false
+    default: ''
+  build-command:
+    description: 'Optional custom build command to replace the default Wails v3 build steps'
+    required: false
+    default: ''
+  build-linux-deb:
+    description: 'Build Linux .deb package'
+    required: false
+    default: 'true'
+  build-linux-rpm:
+    description: 'Build Linux .rpm package'
+    required: false
+    default: 'true'
+  build-linux-appimage:
+    description: 'Build Linux AppImage'
+    required: false
+    default: 'false'
+  build-windows-amd64:
+    description: 'Build Windows amd64 executable'
+    required: false
+    default: 'true'
+  build-windows-amd64-installer:
+    description: 'Build Windows amd64 NSIS installer'
+    required: false
+    default: 'true'
+  build-windows-arm64:
+    description: 'Build Windows arm64 executable'
+    required: false
+    default: 'true'
+  build-windows-arm64-installer:
+    description: 'Build Windows arm64 NSIS installer'
+    required: false
+    default: 'true'
+  windows-install-scope:
+    description: 'Windows NSIS installer scope (user or machine)'
+    required: false
+    default: 'user'
+
+outputs:
+  app-name:
+    description: 'Resolved application name'
+    value: ${{ steps.resolve-meta.outputs.app-name }}
+  artifacts-dir:
+    description: 'Directory containing built artifacts (relative to working-directory)'
+    value: 'bin'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Cache Linux apt packages
+      if: inputs.skip-apt != 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/wails3-apt
+        key: wails3-apt-${{ runner.os }}-${{ runner.arch }}-gtk4-webkit6-nsis-rpm-v1
+
+    - name: Install Linux & Windows cross-build dependencies
+      if: inputs.skip-apt != 'true'
+      shell: bash
+      run: |
+        PKGS="pkg-config gcc libc6-dev libgtk-4-dev libwebkitgtk-6.0-dev nsis rpm"
+        mkdir -p ~/.cache/wails3-apt/partial
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends \
+          -o Dir::Cache::archives="$HOME/.cache/wails3-apt" \
+          -o APT::Keep-Downloaded-Packages=true \
+          $PKGS
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Setup Go (by version)
+      if: inputs.go-version != ''
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: true
+
+    - name: Setup Go (by go.mod)
+      if: inputs.go-version == ''
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+        cache: true
+
+    - name: Inspect Go environment
+      id: go-env
+      shell: bash
+      run: |
+        echo "gopath=$(go env GOPATH)" >> "$GITHUB_OUTPUT"
+        echo "goversion=$(go version | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Wails v3 CLI
+      id: cache-wails3
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.go-env.outputs.gopath }}/bin/wails3*
+        key: wails3-cli-${{ runner.os }}-${{ runner.arch }}-${{ inputs.wails-version }}-${{ steps.go-env.outputs.goversion }}
+
+    - name: Install Wails v3 CLI
+      shell: bash
+      run: |
+        if [ "${{ steps.cache-wails3.outputs.cache-hit }}" != "true" ]; then
+          CGO_ENABLED=0 go install "github.com/wailsapp/wails/v3/cmd/wails3@${{ inputs.wails-version }}"
+        else
+          echo "Using cached wails3 CLI"
+        fi
+        echo "${{ steps.go-env.outputs.gopath }}/bin" >> "$GITHUB_PATH"
+
+    - name: Cache frontend dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.npm
+          ~/.cache/pnpm
+          ~/.cache/yarn
+          ~/.bun/install/cache
+        key: wails3-fe-${{ runner.os }}-${{ inputs.package-manager }}-${{ hashFiles(format('{0}/{1}/package-lock.json', inputs.working-directory, inputs.frontend-dir), format('{0}/{1}/pnpm-lock.yaml', inputs.working-directory, inputs.frontend-dir), format('{0}/{1}/yarn.lock', inputs.working-directory, inputs.frontend-dir), format('{0}/{1}/bun.lockb', inputs.working-directory, inputs.frontend-dir), format('{0}/{1}/package.json', inputs.working-directory, inputs.frontend-dir)) }}
+        restore-keys: |
+          wails3-fe-${{ runner.os }}-${{ inputs.package-manager }}-
+
+    - name: Install frontend dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}/${{ inputs.frontend-dir }}
+      run: |
+        case "${{ inputs.package-manager }}" in
+          npm)
+            if [ -f package-lock.json ]; then
+              npm ci --prefer-offline --no-audit --no-fund || npm install --no-audit --no-fund
+            else
+              npm install --no-audit --no-fund
+            fi
+            ;;
+          pnpm)
+            pnpm install --frozen-lockfile || pnpm install
+            ;;
+          yarn)
+            yarn install --frozen-lockfile || yarn install
+            ;;
+          bun)
+            bun install --frozen-lockfile || bun install
+            ;;
+          *)
+            echo "Unsupported package-manager: ${{ inputs.package-manager }}" >&2
+            exit 1
+            ;;
+        esac
+
+    - name: Resolve application metadata
+      id: resolve-meta
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        APP_NAME="${{ inputs.app-name }}"
+        if [ -z "$APP_NAME" ] && [ -f Taskfile.yml ]; then
+          APP_NAME=$(grep -E '^[[:space:]]*APP_NAME:' Taskfile.yml | head -n 1 | sed -E 's/.*APP_NAME:[[:space:]]*["'\'']?([^"'\''#[:space:]]+).*/\1/' || true)
+        fi
+        if [ -z "$APP_NAME" ] && [ -f build/config.yml ]; then
+          APP_NAME=$(grep -E '^[[:space:]]*productName:' build/config.yml | head -n 1 | sed -E 's/.*productName:[[:space:]]*["'\'']?([^"'\''#[:space:]]+).*/\1/' | tr '[:upper:]' '[:lower:]' || true)
+        fi
+        if [ -z "$APP_NAME" ]; then
+          APP_NAME="app"
+        fi
+        echo "Resolved APP_NAME=$APP_NAME"
+        echo "app-name=$APP_NAME" >> "$GITHUB_OUTPUT"
+
+    - name: Apply version to build/config.yml
+      if: inputs.version != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [ -f build/config.yml ]; then
+          python3 -c "
+        import re
+        with open('build/config.yml', 'r') as f:
+            content = f.read()
+        pattern = r'(info:\s*\n(?:[ \t]+.*\n)*?[ \t]+version:\s*[\"\'\']).*?([\"\'\'][ \t]*(?:#.*)?)'
+        new_content = re.sub(pattern, rf'\g<1>${VERSION}\g<2>', content, count=1)
+        with open('build/config.yml', 'w') as f:
+            f.write(new_content)
+        "
+          echo "Updated build/config.yml version to $VERSION"
+        fi
+
+    - name: Run pre-build command
+      if: inputs.pre-build-command != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: ${{ inputs.pre-build-command }}
+
+    - name: Run custom build command
+      if: inputs.build-command != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: ${{ inputs.build-command }}
+
+    - name: Build Linux & Windows targets
+      if: inputs.build-command == ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GOARCH: amd64
+      run: |
+        APP_NAME="${{ steps.resolve-meta.outputs.app-name }}"
+        VERSION="${{ inputs.version }}"
+        SCOPE="${{ inputs.windows-install-scope }}"
+
+        if [ "${{ inputs.build-linux-deb }}" = "true" ]; then
+          echo "==> Building Linux DEB..."
+          wails3 task linux:create:deb
+          if [ -n "$VERSION" ] && [ -f "bin/${APP_NAME}.deb" ]; then
+            cp "bin/${APP_NAME}.deb" "bin/${APP_NAME}_${VERSION}_linux_amd64.deb"
+          fi
+        fi
+
+        if [ "${{ inputs.build-linux-rpm }}" = "true" ]; then
+          echo "==> Building Linux RPM..."
+          wails3 task linux:create:rpm
+          if [ -n "$VERSION" ] && [ -f "bin/${APP_NAME}.rpm" ]; then
+            cp "bin/${APP_NAME}.rpm" "bin/${APP_NAME}-${VERSION}-1.x86_64.rpm"
+          fi
+        fi
+
+        if [ "${{ inputs.build-linux-appimage }}" = "true" ]; then
+          echo "==> Building Linux AppImage..."
+          wails3 task linux:create:appimage
+          if [ -n "$VERSION" ] && [ -f "bin/${APP_NAME}.AppImage" ]; then
+            cp "bin/${APP_NAME}.AppImage" "bin/${APP_NAME}-${VERSION}-linux-amd64.AppImage"
+          fi
+        fi
+
+        if [ "${{ inputs.build-windows-amd64 }}" = "true" ] || [ "${{ inputs.build-windows-amd64-installer }}" = "true" ]; then
+          echo "==> Building Windows amd64..."
+          wails3 task windows:build ARCH=amd64
+          if [ -n "$VERSION" ] && [ -f "bin/${APP_NAME}.exe" ]; then
+            cp "bin/${APP_NAME}.exe" "bin/${APP_NAME}-${VERSION}-windows-amd64.exe"
+          fi
+          if [ "${{ inputs.build-windows-amd64-installer }}" = "true" ]; then
+            wails3 task windows:create:nsis:installer ARCH=amd64 INSTALL_SCOPE="$SCOPE"
+            if [ ! -f "bin/${APP_NAME}-amd64-installer.exe" ]; then
+              echo "Error: bin/${APP_NAME}-amd64-installer.exe not generated!" >&2
+              exit 1
+            fi
+            if [ -n "$VERSION" ]; then
+              cp "bin/${APP_NAME}-amd64-installer.exe" "bin/${APP_NAME}-${VERSION}-windows-amd64-installer.exe"
+            fi
+          fi
+        fi
+
+        if [ "${{ inputs.build-windows-arm64 }}" = "true" ] || [ "${{ inputs.build-windows-arm64-installer }}" = "true" ]; then
+          echo "==> Building Windows arm64..."
+          wails3 task windows:build ARCH=arm64
+          if [ -n "$VERSION" ] && [ -f "bin/${APP_NAME}.exe" ]; then
+            cp "bin/${APP_NAME}.exe" "bin/${APP_NAME}-${VERSION}-windows-arm64.exe"
+          fi
+          if [ "${{ inputs.build-windows-arm64-installer }}" = "true" ]; then
+            wails3 task windows:create:nsis:installer ARCH=arm64 INSTALL_SCOPE="$SCOPE"
+            if [ ! -f "bin/${APP_NAME}-arm64-installer.exe" ]; then
+              echo "Error: bin/${APP_NAME}-arm64-installer.exe not generated!" >&2
+              exit 1
+            fi
+            if [ -n "$VERSION" ]; then
+              cp "bin/${APP_NAME}-arm64-installer.exe" "bin/${APP_NAME}-${VERSION}-windows-arm64-installer.exe"
+            fi
+          fi
+        fi
