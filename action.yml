@@ -105,7 +105,7 @@ runs:
   steps:
     - name: Cache Linux apt packages
       if: inputs.skip-apt != 'true' && inputs.skip-setup != 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v6.1.0
       with:
         path: ~/.cache/wails3-apt
         key: wails3-apt-${{ runner.os }}-${{ runner.arch }}-gtk4-webkit6-nsis-rpm-v1
@@ -124,20 +124,20 @@ runs:
 
     - name: Setup Node.js
       if: inputs.skip-setup != 'true'
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v7.1.0
       with:
         node-version: ${{ inputs.node-version }}
 
     - name: Setup Go (by version)
       if: inputs.skip-setup != 'true' && inputs.go-version != ''
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7.1.0
       with:
         go-version: ${{ inputs.go-version }}
         cache: true
 
     - name: Setup Go (by go.mod)
       if: inputs.skip-setup != 'true' && inputs.go-version == ''
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7.1.0
       with:
         go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
         cache: true
@@ -151,7 +151,7 @@ runs:
 
     - name: Cache Go modules & build cache (container mode)
       if: inputs.skip-setup == 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v6.1.0
       with:
         path: |
           ${{ steps.go-env.outputs.gopath }}/pkg/mod
@@ -163,7 +163,7 @@ runs:
     - name: Cache Wails v3 CLI
       if: inputs.skip-setup != 'true'
       id: cache-wails3
-      uses: actions/cache@v4
+      uses: actions/cache@v6.1.0
       with:
         path: ${{ steps.go-env.outputs.gopath }}/bin/wails3*
         key: wails3-cli-${{ runner.os }}-${{ runner.arch }}-${{ inputs.wails-version }}-${{ steps.go-env.outputs.goversion }}
@@ -180,7 +180,7 @@ runs:
         echo "${{ steps.go-env.outputs.gopath }}/bin" >> "$GITHUB_PATH"
 
     - name: Cache frontend dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v6.1.0
       with:
         path: |
           ~/.npm
